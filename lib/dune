@@ -1,0 +1,6 @@
+(library
+ (name ir)
+ (public_name better_irsim)
+ (preprocess
+  (pps ppx_deriving.show))
+ (libraries angstrom))
