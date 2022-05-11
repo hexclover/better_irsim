@@ -638,8 +638,8 @@ class machine ~mem_words ~input ~output =
 
     method private fetch_and_run () =
       (* Calculate cost of an instruction *)
-      let dummy, normal, call, goto, if_t, if_f, return, halt_cost =
-        (1, 1, 1, 0, 0, 1, 0, 1)
+      let dummy, normal, call, goto, if_t, if_f, return =
+        (1, 1, 0, 0, 0, 1, 1)
       in
       let halt = ref None in
       let instr = self#fetch_instr () in
@@ -681,7 +681,7 @@ class machine ~mem_words ~input ~output =
                 m_regs <- saved_regs;
                 if tl = [] then (
                   halt := Some vx;
-                  halt_cost)
+                  return)
                 else (
                   self#write_mem ret_val_addr vx;
                   return)

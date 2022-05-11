@@ -55,11 +55,7 @@ type registers = {
   mutable ap : int32;
 }
 
-type actv_rec = {
-  fn : id;
-  ret_val_addr : int32;
-  saved_regs : registers;
-}
+type actv_rec = { fn : id; ret_val_addr : int32; saved_regs : registers }
 
 class machine :
   mem_words:int32
