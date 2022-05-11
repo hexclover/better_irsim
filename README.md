@@ -4,7 +4,7 @@ better_irsim
 Dependencies
 ----
 
-- ocaml
+- ocaml >= 4.14
 - dune
 - angstrom
 

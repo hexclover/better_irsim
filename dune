@@ -1,3 +1,5 @@
 (alias
  (name default)
- (deps (alias lib/default) (alias cli/default)))
+ (deps
+  (alias lib/default)
+  (alias cli/default)))
