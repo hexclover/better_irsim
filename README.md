@@ -32,7 +32,10 @@ $ dune build install
 
 The GUI is being worked on.
 
-About The Syntax
+TODO
 ----
 
-TODO
+- More options: Limit time / number of instructions to run; trap; etc.
+- Document the syntax
+- Better parsing error messages
+- Closely imitate the original behavior wrt immediates and arithmetic
