@@ -1,4 +1,32 @@
-open Ir
+open Better_irsim.Ir
+
+let program_name = Sys.argv.(0)
+let verbose = ref false
+let ir_file, input_file = (ref "-", ref "-")
+let usage_msg = program_name ^ " [-verbose] [ir-file] [input-file]"
+let maybe_open_in = function "-" -> stdin | s -> open_in s
+
+let () =
+  let open Arg in
+  let anon_cnt = ref 0 in
+  let anon_fun s =
+    (match !anon_cnt with
+    | 0 -> ir_file := s
+    | 1 -> input_file := s
+    | _ -> raise @@ Bad ("Unrecognized positional argument: " ^ s));
+    anon_cnt := !anon_cnt + 1
+  in
+  let speclist =
+    [
+      ("-verbose", Set verbose, "Print program and execution information");
+      ( "-",
+        Unit (fun () -> anon_fun "-"),
+        "When specifying a file, stands for STDIN" );
+    ]
+  in
+  parse speclist anon_fun usage_msg
+
+let ir_file, input_file = (maybe_open_in !ir_file, maybe_open_in !input_file)
 
 let line_stream_of_channel channel =
   Seq.of_dispenser @@ fun _ ->
@@ -12,27 +40,19 @@ let parse_stmt i line =
       exit 1
 
 let () =
-  let maybe_open_in = function "-" -> stdin | s -> open_in s in
-  let ir_file, input_file =
-    match Array.length Sys.argv with
-    | 2 -> (maybe_open_in Sys.argv.(1), stdin)
-    | 3 -> (maybe_open_in Sys.argv.(1), maybe_open_in Sys.argv.(2))
-    | _ ->
-        Printf.printf "Usage: %s ir-file [input-file]\n" Sys.argv.(0);
-        exit 1
-  in
   let ir_stream = Seq.mapi parse_stmt @@ line_stream_of_channel ir_file in
   let input_stream =
     Seq.map Int32.of_string @@ line_stream_of_channel input_file
   in
   match compile ir_stream with
   | Ok ({ codetbl; symtbl } as p) -> (
-      Printf.printf "Code\n--------\n";
-      pretty_stmt_array stdout codetbl;
-      Printf.printf "\nSymbol Table\n--------\n";
-      pretty_symtbl stdout symtbl;
-      Printf.printf "\nExecution:\n--------\n";
-      flush stdout;
+      if !verbose then (
+        Printf.printf "Code\n--------\n";
+        pretty_stmt_array stdout codetbl;
+        Printf.printf "\nSymbol Table\n--------\n";
+        pretty_symtbl stdout symtbl;
+        Printf.printf "\nExecution:\n--------\n";
+        flush stdout);
       let m =
         new machine
           ~mem_words:(Int32.mul 64l @@ Int32.mul 1024l 1024l)
@@ -46,12 +66,14 @@ let () =
       match m#run () with
       | Ok ret_code ->
           let end_time = Sys.time () in
-          if ret_code = 0l then
-            Printf.printf "Exited successfully with code %ld\n" ret_code
-          else Printf.printf "Exited with non-zero code %ld\n" ret_code;
-          Printf.printf "Executed %d instructions in %f seconds.\n"
-            m#executed_count
-          @@ (end_time -. start_time)
+          if !verbose then (
+            if ret_code = 0l then
+              Printf.printf "Exited successfully with code %ld\n" ret_code
+            else Printf.printf "Exited with non-zero code %ld\n" ret_code;
+            Printf.printf "Executed %d instructions in %f seconds.\n"
+              m#executed_count
+            @@ (end_time -. start_time));
+          exit @@ Int32.to_int ret_code
       | Error e ->
           Printf.printf "Error during execution: %s\n" @@ show_emulator_error e)
   | Error e ->

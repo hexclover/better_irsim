@@ -1,5 +1,5 @@
 (library
- (name ir)
+ (name better_irsim)
  (public_name better_irsim)
  (preprocess
   (pps ppx_deriving.show))
