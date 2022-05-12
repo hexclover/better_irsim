@@ -35,7 +35,7 @@ module Parse = struct
     | _ -> not (is_ws c)
 
   let is_id_begin (c : char) =
-    match c with 'a' .. 'z' -> is_id_mid c | _ -> false
+    match c with 'A' .. 'Z' | 'a' .. 'z' | '_' -> is_id_mid c | _ -> false
 
   let any_ws = skip_many (satisfy is_ws)
 
@@ -50,8 +50,8 @@ module Parse = struct
     *> ( option '+' (char '+' <|> char '-') >>= fun c ->
          take_while1 is_digit >>= fun x ->
          let s = String.make 1 c ^ x in
-         match Int32.of_string_opt s with
-         | Some i -> return i
+         match Int64.of_string_opt s with
+         | Some i -> return @@ Int64.to_int32 i
          | None -> fail ("Invalid 32-bit integer: " ^ s) )
 
   let imm_p = any_ws *> ((fun x -> I32 x) <$> char '#' *> i32_p)
@@ -142,16 +142,21 @@ module SymMap = Map.Make (String)
 
 type rel_addr = RelSp of int32 | RelBp of int32 [@@deriving show]
 
-type symbol =
-  | Fun of {
-      rev_args : id list;
-      entry_addr : int32;
-      end_addr : int32;
-      stack_size : int32;
-      arg_size : int32;
-    }
-  | Var of { of_fun : id; rel_addr : rel_addr; size : int32 }
-  | Label of { of_fun : id; entry_addr : int32 }
+type fun_symb = {
+  rev_args : id list;
+  entry_addr : int32;
+  end_addr : int32;
+  stack_size : int32;
+  arg_size : int32;
+}
+[@@deriving show]
+
+type var_symb = { of_fun : id; rel_addr : rel_addr; size : int32 }
+[@@deriving show]
+
+type lbl_symb = { of_fun : id; entry_addr : int32 } [@@deriving show]
+
+type symbol = Fun of fun_symb | Var of var_symb | Label of lbl_symb
 [@@deriving show]
 
 let pretty_stmt_array f arr =
@@ -538,17 +543,17 @@ class machine ~mem_words ~input ~output =
 
     method private lookup_label id =
       match self#lookup_or_fail id with
-      | Label _ as l -> l
+      | Label l -> l
       | _ -> m_fail BadProgram @@ Some ("Not a label: " ^ id)
 
     method private lookup_var id =
       match self#lookup_or_fail id with
-      | Var _ as v -> v
+      | Var v -> v
       | _ -> m_fail BadProgram @@ Some ("Not a variable: " ^ id)
 
     method private lookup_func id =
       match self#lookup_or_fail id with
-      | Fun _ as f -> f
+      | Fun f -> f
       | _ -> m_fail BadProgram @@ Some ("Not a function: " ^ id)
 
     method private current_actv_rec () =
@@ -572,13 +577,25 @@ class machine ~mem_words ~input ~output =
 
     method private fetch_instr () =
       let codetbl = self#get_program.codetbl in
-      let idx = Int32.to_int m_regs.pc in
-      if idx < 0 || idx >= Array.length codetbl then
-        m_fail Segv @@ Some ("PC out of bound: " ^ Int32.to_string m_regs.pc)
+      let { fn; _ }, { entry_addr; end_addr; _ } =
+        self#current_actv_rec_with_func ()
+      in
+      if m_regs.pc < entry_addr || m_regs.pc >= end_addr then
+        m_fail Unsafe
+        @@ Some
+             (Printf.sprintf
+                "Going to instruction %ld outside scope [%ld, %ld) of current \
+                 function %s"
+                m_regs.pc entry_addr end_addr
+             @@ show_id fn)
       else
-        let instr = codetbl.(idx) in
-        m_regs.pc <- Int32.add m_regs.pc 1l;
-        instr
+        let idx = Int32.to_int m_regs.pc in
+        if idx < 0 || idx >= Array.length codetbl then
+          m_fail Segv @@ Some ("PC out of bound: " ^ Int32.to_string m_regs.pc)
+        else
+          let instr = codetbl.(idx) in
+          m_regs.pc <- Int32.add m_regs.pc 1l;
+          instr
 
     method private read_mem addr = m_memory.(self#addr_to_idx_checked addr)
 
@@ -587,11 +604,10 @@ class machine ~mem_words ~input ~output =
 
     method private addr_of_var id =
       match self#lookup_var id with
-      | Var { rel_addr; _ } -> (
+      | { rel_addr; _ } -> (
           match rel_addr with
           | RelBp rel -> Int32.add m_regs.bp rel
           | RelSp rel -> Int32.add m_regs.sp rel)
-      | _ -> failwith "Impossible"
 
     (* TODO: add checks for whether variable is in current function *)
     method private read_var id = self#read_mem (self#addr_of_var id)
@@ -605,7 +621,7 @@ class machine ~mem_words ~input ~output =
 
     method private local_jump id =
       match self#lookup_label id with
-      | Label { of_fun = src_fun; entry_addr; _ } -> (
+      | { of_fun = src_fun; entry_addr; _ } -> (
           match self#current_actv_rec () with
           | { fn = dest_fun; _ } ->
               if src_fun = dest_fun then m_regs.pc <- entry_addr
@@ -616,7 +632,6 @@ class machine ~mem_words ~input ~output =
                         "Jump from instruction %ld (function %s) to label %s \
                          (%s, %ld) is across functions"
                         m_regs.pc src_fun id dest_fun entry_addr))
-      | _ -> failwith "Impossible"
 
     method private do_arith =
       function
