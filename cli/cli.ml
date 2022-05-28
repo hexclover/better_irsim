@@ -56,6 +56,9 @@ let () =
     Seq.map Int32.of_string @@ line_stream_of_channel input_file
   in
   match compile ir_stream with
+  | Error e ->
+      Printf.eprintf "Error during compilation: %s\n" e;
+      exit 1
   | Ok ({ codetbl; symtbl } as p) -> (
       if !verbose then (
         Printf.printf "Code\n--------\n";
@@ -76,6 +79,8 @@ let () =
       m#load p;
       let start_time = Sys.time () in
       match m#run () with
+      | Error e ->
+          Printf.printf "Error during execution: %s\n" @@ show_emulator_error e
       | Ok ret_code ->
           let end_time = Sys.time () in
           if !verbose then (
@@ -85,9 +90,4 @@ let () =
             Printf.printf "Executed %d instructions in %f seconds.\n"
               m#executed_count
             @@ (end_time -. start_time));
-          exit @@ Int32.to_int ret_code
-      | Error e ->
-          Printf.printf "Error during execution: %s\n" @@ show_emulator_error e)
-  | Error e ->
-      Printf.eprintf "Error during compilation: %s\n" e;
-      exit 1
+          exit @@ Int32.to_int ret_code)

@@ -427,14 +427,12 @@ let compile seq =
 type emu_err_kind =
   | NoProgram
   | BadProgram
+  | Arith
   | Segv
   | MemAlign
   | IOErr
   | Unsafe
   | Misc
-[@@deriving show]
-
-type emulator_error = { kind : emu_err_kind; text : string option }
 [@@deriving show]
 
 type registers = {
@@ -447,6 +445,7 @@ type registers = {
 [@@deriving show]
 
 let regs_of_zero () = { pc = 0l; sp = 0l; bp = 0l; ap = 0l }
+let registers_copy = function { pc; sp; bp; ap } -> { pc; sp; bp; ap }
 
 let zero_regs regs =
   regs.pc <- 0l;
@@ -462,20 +461,19 @@ type actv_rec = {
 }
 [@@deriving show]
 
+type emulator_error = {
+  kind : emu_err_kind;
+  text : string option;
+  regs : registers;
+}
+[@@deriving show]
+
 exception EmulatorErrorWrapper of emulator_error
 exception Halt of int32
 
 let word_size = 4l
-let m_fail kind text = raise @@ EmulatorErrorWrapper { kind; text }
 
 type division_flavor = Trunc | RoundDown
-
-let div_round_down x y =
-  if (x >= 0l && y >= 0l) || (x <= 0l && y <= 0l) then Int32.div x y
-  else
-    let open Int64 in
-    let x', y' = (abs @@ of_int32 x, abs @@ of_int32 y) in
-    to_int32 @@ neg @@ div (sub (add x' y') 1L) y'
 
 class machine ~mem_words ~input ~output =
   object (self)
@@ -490,12 +488,30 @@ class machine ~mem_words ~input ~output =
     val m_addr_lo = 0l
     val m_addr_hi = Int32.mul word_size mem_words
 
+    method private m_fail : 'a. _ -> _ -> 'a =
+      fun kind text ->
+        raise
+        @@ EmulatorErrorWrapper
+             { kind; text; regs = self#view_registers m_regs }
+
+    method private do_division x y =
+      try
+        match m_div_flavor with
+        | RoundDown ->
+            if (x >= 0l && y >= 0l) || (x <= 0l && y <= 0l) then Int32.div x y
+            else
+              let open Int64 in
+              let x', y' = (abs @@ of_int32 x, abs @@ of_int32 y) in
+              to_int32 @@ neg @@ div (sub (add x' y') 1L) y'
+        | Trunc -> Int32.div x y
+      with Division_by_zero -> self#m_fail Arith @@ Some "Division by zero!"
+
     method private input_i32 () =
       match Seq.uncons m_input with
       | Some (a, input') ->
           m_input <- input';
           a
-      | _ -> m_fail IOErr (Some "No more input")
+      | _ -> self#m_fail IOErr (Some "No more input")
 
     method private output_i32 v = output v
 
@@ -509,12 +525,12 @@ class machine ~mem_words ~input ~output =
       m_call_stack <- []
 
     method private get_program : program =
-      match m_program with None -> m_fail NoProgram None | Some p -> p
+      match m_program with None -> self#m_fail NoProgram None | Some p -> p
 
     method private lookup_or_fail id =
       match SymMap.find_opt id self#get_program.symtbl with
       | Some v -> v
-      | _ -> m_fail BadProgram @@ Some ("No such symbol: " ^ id)
+      | _ -> self#m_fail BadProgram @@ Some ("No such symbol: " ^ id)
 
     method private setup_call id ret_val_addr =
       match self#lookup_or_fail id with
@@ -534,7 +550,7 @@ class machine ~mem_words ~input ~output =
           m_regs.sp <- new_sp;
           m_regs.ap <- new_sp;
           m_call_stack <- { fn = id; saved_regs; ret_val_addr } :: m_call_stack
-      | _ -> m_fail BadProgram @@ Some ("Not a function: " ^ id)
+      | _ -> self#m_fail BadProgram @@ Some ("Not a function: " ^ id)
 
     method load ?(entry = "main") =
       function
@@ -545,31 +561,31 @@ class machine ~mem_words ~input ~output =
               self#reset ();
               self#setup_call entry 0l
           | Some _ ->
-              m_fail BadProgram
+              self#m_fail BadProgram
               @@ Some (Printf.sprintf "Entry %s is not a function" entry)
           | None ->
-              m_fail BadProgram
+              self#m_fail BadProgram
               @@ Some (Printf.sprintf "Entry function %s not found" entry))
 
     method private lookup_label id =
       match self#lookup_or_fail id with
       | Label l -> l
-      | _ -> m_fail BadProgram @@ Some ("Not a label: " ^ id)
+      | _ -> self#m_fail BadProgram @@ Some ("Not a label: " ^ id)
 
     method private lookup_var id =
       match self#lookup_or_fail id with
       | Var v -> v
-      | _ -> m_fail BadProgram @@ Some ("Not a variable: " ^ id)
+      | _ -> self#m_fail BadProgram @@ Some ("Not a variable: " ^ id)
 
     method private lookup_func id =
       match self#lookup_or_fail id with
       | Fun f -> f
-      | _ -> m_fail BadProgram @@ Some ("Not a function: " ^ id)
+      | _ -> self#m_fail BadProgram @@ Some ("Not a function: " ^ id)
 
     method private current_actv_rec () =
       match m_call_stack with
       | a :: _ -> a
-      | _ -> m_fail Misc @@ Some "No activation record available???"
+      | _ -> self#m_fail Misc @@ Some "No activation record available???"
 
     method private current_actv_rec_with_func () =
       match self#current_actv_rec () with
@@ -577,12 +593,13 @@ class machine ~mem_words ~input ~output =
 
     method private addr_to_idx_checked addr =
       if Int32.rem addr 4l <> 0l then
-        m_fail MemAlign
+        self#m_fail MemAlign
         @@ Some ("Unaligned memory access: " ^ Int32.to_string addr)
       else
         let idx = Int32.to_int (Int32.div addr 4l) in
         if idx < 0 || idx >= Array.length m_memory then
-          m_fail Segv @@ Some ("Address out of bound: " ^ Int32.to_string addr)
+          self#m_fail Segv
+          @@ Some ("Address out of bound: " ^ Int32.to_string addr)
         else idx
 
     method private fetch_instr () =
@@ -591,7 +608,7 @@ class machine ~mem_words ~input ~output =
         self#current_actv_rec_with_func ()
       in
       if m_regs.pc < entry_addr || m_regs.pc >= end_addr then
-        m_fail Unsafe
+        self#m_fail Unsafe
         @@ Some
              (Printf.sprintf
                 "Going to instruction %ld outside scope [%ld, %ld) of current \
@@ -601,7 +618,8 @@ class machine ~mem_words ~input ~output =
       else
         let idx = Int32.to_int m_regs.pc in
         if idx < 0 || idx >= Array.length codetbl then
-          m_fail Segv @@ Some ("PC out of bound: " ^ Int32.to_string m_regs.pc)
+          self#m_fail Segv
+          @@ Some ("PC out of bound: " ^ Int32.to_string m_regs.pc)
         else
           let instr = codetbl.(idx) in
           m_regs.pc <- Int32.add m_regs.pc 1l;
@@ -636,7 +654,7 @@ class machine ~mem_words ~input ~output =
           | { fn = dest_fun; _ } ->
               if src_fun = dest_fun then m_regs.pc <- entry_addr
               else
-                m_fail Unsafe
+                self#m_fail Unsafe
                 @@ Some
                      (Printf.sprintf
                         "Jump from instruction %ld (function %s) to label %s \
@@ -650,10 +668,7 @@ class machine ~mem_words ~input ~output =
       | Add -> Int32.add
       | Sub -> Int32.sub
       | Mul -> Int32.mul
-      | Div -> (
-          match m_div_flavor with
-          | Trunc -> Int32.div
-          | RoundDown -> div_round_down)
+      | Div -> self#do_division
 
     method private do_cmp op x y =
       (match op with
@@ -666,13 +681,12 @@ class machine ~mem_words ~input ~output =
         (Int32.compare x y) 0
 
     method private fetch_and_run () =
-      (* Calculate cost of an instruction *)
       let dummy, normal, call, goto, if_t, if_f, return =
         (1, 1, 0, 0, 0, 1, 1)
       in
       let halt = ref None in
       let instr = self#fetch_instr () in
-      let d_ec =
+      let cost =
         match instr with
         | Label _ | Dec _ | Param _ | Function _ -> dummy
         | Assign (id, x) ->
@@ -690,7 +704,8 @@ class machine ~mem_words ~input ~output =
         (* TOOD: an alternative: add new operand kinds: REF, INDIR *)
         | Load (x, y) ->
             self#write_var x @@ self#read_mem @@ self#eval_operand (Id y);
-            normal (* *x = y *)
+            normal
+        (* *x = y *)
         | Store (x, y) ->
             self#write_mem (self#eval_operand (Id x)) @@ self#eval_operand y;
             normal
@@ -708,14 +723,11 @@ class machine ~mem_words ~input ~output =
             | { saved_regs; ret_val_addr; fn = _ } :: tl ->
                 m_call_stack <- tl;
                 m_regs <- saved_regs;
-                if tl = [] then (
-                  halt := Some vx;
-                  return)
-                else (
-                  self#write_mem ret_val_addr vx;
-                  return)
+                if tl = [] then halt := Some vx
+                else self#write_mem ret_val_addr vx;
+                return
             | _ ->
-                m_fail Misc
+                self#m_fail Misc
                 @@ Some "Impossible: return when call stack is empty?")
         | Arg x ->
             let vx = self#eval_operand x in
@@ -732,10 +744,7 @@ class machine ~mem_words ~input ~output =
             self#output_i32 @@ self#eval_operand x;
             normal
       in
-      m_executed_count <- m_executed_count + d_ec;
-      (* if d_ec <> 0 then *)
-      (*   Printf.printf "EC = %d, Instruction %s\n" m_executed_count *)
-      (*   @@ show_stmt instr; *)
+      m_executed_count <- m_executed_count + cost;
       Option.iter (fun ret -> raise @@ Halt ret) !halt
 
     method run () =
@@ -749,4 +758,5 @@ class machine ~mem_words ~input ~output =
       | EmulatorErrorWrapper e -> Error e
 
     method executed_count = m_executed_count
+    method view_registers = registers_copy m_regs
   end

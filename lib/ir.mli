@@ -40,19 +40,24 @@ val compile : stmt Seq.t -> (program, string) result
 type emu_err_kind =
   | NoProgram
   | BadProgram
+  | Arith
   | Segv
   | MemAlign
   | IOErr
   | Unsafe
   | Misc
 
-type emulator_error = { kind : emu_err_kind; text : string option }
-
 type registers = {
   mutable pc : int32;
   mutable sp : int32;
   mutable bp : int32;
   mutable ap : int32;
+}
+
+type emulator_error = {
+  kind : emu_err_kind;
+  text : string option;
+  regs : registers;
 }
 
 type actv_rec = { fn : id; ret_val_addr : int32; saved_regs : registers }
@@ -67,6 +72,7 @@ class machine :
        method load : ?entry:string -> program -> unit
        method run : unit -> (int32, emulator_error) result
        method executed_count : int
+       method view_registers : registers
      end
 
 val show_emu_err_kind : emu_err_kind -> string
