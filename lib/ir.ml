@@ -485,16 +485,22 @@ class machine ~mem_words ~input ~output =
     val mutable m_executed_count : int = 0
     val mutable m_program : program option = None
     val mutable m_div_flavor = RoundDown
+    val mutable m_verbose = false
+    val mutable m_div_warned = false
     val m_addr_lo = 0l
     val m_addr_hi = Int32.mul word_size mem_words
 
     method private m_fail : 'a. _ -> _ -> 'a =
       fun kind text ->
-        raise
-        @@ EmulatorErrorWrapper
-             { kind; text; regs = self#view_registers m_regs }
+        raise @@ EmulatorErrorWrapper { kind; text; regs = self#view_registers }
 
     method private do_division x y =
+      if m_verbose || not m_div_warned then (
+        m_div_warned <- true;
+        output_string stderr
+          "WARNING: Doing division during execution; the result may be \
+           inaccurate.\n";
+        flush stderr);
       try
         match m_div_flavor with
         | RoundDown ->
@@ -522,7 +528,8 @@ class machine ~mem_words ~input ~output =
       m_regs.bp <- m_addr_hi;
       m_regs.ap <- m_addr_hi;
       m_executed_count <- 0;
-      m_call_stack <- []
+      m_call_stack <- [];
+      m_div_warned <- false
 
     method private get_program : program =
       match m_program with None -> self#m_fail NoProgram None | Some p -> p
@@ -757,6 +764,7 @@ class machine ~mem_words ~input ~output =
       | Halt res -> Ok res
       | EmulatorErrorWrapper e -> Error e
 
+    method set_verbosity b = m_verbose <- b
     method executed_count = m_executed_count
     method view_registers = registers_copy m_regs
   end

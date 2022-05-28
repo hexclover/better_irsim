@@ -71,6 +71,7 @@ class machine :
        method set_division_flavor : division_flavor -> unit
        method load : ?entry:string -> program -> unit
        method run : unit -> (int32, emulator_error) result
+       method set_verbosity : bool -> unit
        method executed_count : int
        method view_registers : registers
      end

@@ -76,6 +76,7 @@ let () =
             flush stdout)
       in
       Option.iter (fun x -> m#set_division_flavor x) !division;
+      m#set_verbosity !verbose;
       m#load p;
       let start_time = Sys.time () in
       match m#run () with
