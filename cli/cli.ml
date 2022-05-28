@@ -2,12 +2,19 @@ open Better_irsim.Ir
 
 let program_name = Sys.argv.(0)
 let verbose = ref false
+let division = ref None
 let ir_file, input_file = (ref "-", ref "-")
 let usage_msg = program_name ^ " [-verbose] [ir-file] [input-file]"
 let maybe_open_in = function "-" -> stdin | s -> open_in s
 
 let () =
   let open Arg in
+  let set_division s =
+    match String.lowercase_ascii s with
+    | "trunc" -> division := Some Trunc
+    | "rounddown" -> division := Some RoundDown
+    | _ -> raise @@ Bad ("Unknown division rounding behavior: " ^ s)
+  in
   let anon_cnt = ref 0 in
   let anon_fun s =
     (match !anon_cnt with
@@ -19,6 +26,10 @@ let () =
   let speclist =
     [
       ("-verbose", Set verbose, "Print program and execution information");
+      ( "-division",
+        String set_division,
+        "Set integer division behavior: <rounddown|trunc> (default is \
+         rounddown)" );
       ( "-",
         Unit (fun () -> anon_fun "-"),
         "When specifying a file, stands for STDIN" );
@@ -61,6 +72,7 @@ let () =
             Printf.printf "%ld\n" v;
             flush stdout)
       in
+      Option.iter (fun x -> m#set_division_flavor x) !division;
       m#load p;
       let start_time = Sys.time () in
       match m#run () with

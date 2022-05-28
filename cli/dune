@@ -1,4 +1,5 @@
 (executable
+ (package better_irsim)
  (name cli)
  (public_name irsim_cli)
  (libraries better_irsim))

@@ -56,12 +56,14 @@ type registers = {
 }
 
 type actv_rec = { fn : id; ret_val_addr : int32; saved_regs : registers }
+type division_flavor = Trunc | RoundDown
 
 class machine :
   mem_words:int32
   -> input:int32 Seq.t
   -> output:(int32 -> unit)
   -> object
+       method set_division_flavor : division_flavor -> unit
        method load : ?entry:string -> program -> unit
        method run : unit -> (int32, emulator_error) result
        method executed_count : int

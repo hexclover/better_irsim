@@ -468,6 +468,15 @@ exception Halt of int32
 let word_size = 4l
 let m_fail kind text = raise @@ EmulatorErrorWrapper { kind; text }
 
+type division_flavor = Trunc | RoundDown
+
+let div_round_down x y =
+  if (x >= 0l && y >= 0l) || (x <= 0l && y <= 0l) then Int32.div x y
+  else
+    let open Int64 in
+    let x', y' = (abs @@ of_int32 x, abs @@ of_int32 y) in
+    to_int32 @@ neg @@ div (sub (add x' y') 1L) y'
+
 class machine ~mem_words ~input ~output =
   object (self)
     val mutable m_regs : registers = regs_of_zero ()
@@ -477,6 +486,7 @@ class machine ~mem_words ~input ~output =
     val mutable m_call_stack : actv_rec list = []
     val mutable m_executed_count : int = 0
     val mutable m_program : program option = None
+    val mutable m_div_flavor = RoundDown
     val m_addr_lo = 0l
     val m_addr_hi = Int32.mul word_size mem_words
 
@@ -633,13 +643,17 @@ class machine ~mem_words ~input ~output =
                          (%s, %ld) is across functions"
                         m_regs.pc src_fun id dest_fun entry_addr))
 
+    method set_division_flavor flavor = m_div_flavor <- flavor
+
     method private do_arith =
       function
       | Add -> Int32.add
       | Sub -> Int32.sub
       | Mul -> Int32.mul
-      | Div -> Int32.div
-    (* TODO: warning about division? *)
+      | Div -> (
+          match m_div_flavor with
+          | Trunc -> Int32.div
+          | RoundDown -> div_round_down)
 
     method private do_cmp op x y =
       (match op with
@@ -722,7 +736,7 @@ class machine ~mem_words ~input ~output =
       (* if d_ec <> 0 then *)
       (*   Printf.printf "EC = %d, Instruction %s\n" m_executed_count *)
       (*   @@ show_stmt instr; *)
-      ignore @@ Option.map (fun ret -> raise @@ Halt ret) !halt
+      Option.iter (fun ret -> raise @@ Halt ret) !halt
 
     method run () =
       try
